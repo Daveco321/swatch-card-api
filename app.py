@@ -3,16 +3,12 @@ from flask_cors import CORS
 import xlsxwriter
 import requests
 from io import BytesIO
-from PIL import Image
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 
 app = Flask(__name__)
-CORS(app)  # Allow requests from your Netlify site
+CORS(app)
 
-# ============================================
-# CONFIGURATION
-# ============================================
 STYLE_CONFIG = {
     'header_bg': '#1E3A5F',
     'header_text': '#FFFFFF',
@@ -25,47 +21,27 @@ STYLE_CONFIG = {
 TARGET_SIZE = 100
 COL_WIDTH_UNITS = 18
 
-# ============================================
-# IMAGE PROCESSING
-# ============================================
 def process_image(url, index):
-    """Download and process image for Excel embedding"""
     if not url:
         return None
     try:
         response = requests.get(url, timeout=10)
         if response.status_code != 200:
             return None
-        
         img_data = BytesIO(response.content)
-        img = Image.open(img_data)
-        
-        # Calculate scaling
-        width, height = img.size
-        x_scale = TARGET_SIZE / width
-        y_scale = TARGET_SIZE / height
-        
-        # Center in cell
-        x_offset = (TARGET_SIZE - (width * x_scale)) / 2 + 5
-        y_offset = (TARGET_SIZE - (height * y_scale)) / 2 + 5
-        
-        img_data.seek(0)
         return {
             'index': index,
             'image_data': img_data,
-            'x_scale': x_scale,
-            'y_scale': y_scale,
-            'x_offset': x_offset,
-            'y_offset': y_offset,
+            'x_scale': 0.5,
+            'y_scale': 0.5,
+            'x_offset': 5,
+            'y_offset': 5,
             'url': url
         }
     except Exception as e:
         print(f"Error processing image {index}: {e}")
         return None
 
-# ============================================
-# EXCEL GENERATION
-# ============================================
 @app.route('/api/export-excel', methods=['POST'])
 def export_excel():
     try:
@@ -76,7 +52,6 @@ def export_excel():
         if not swatches:
             return jsonify({'error': 'No swatches provided'}), 400
         
-        # Create workbook in memory
         output = BytesIO()
         workbook = xlsxwriter.Workbook(output, {'in_memory': True})
         
@@ -88,7 +63,6 @@ def export_excel():
         
         worksheet = workbook.add_worksheet('Swatch Card')
         
-        # Define formats
         fmt_header = workbook.add_format({
             'bold': True,
             'font_color': STYLE_CONFIG['header_text'],
@@ -138,31 +112,26 @@ def export_excel():
             'font_color': STYLE_CONFIG['po_ref_color'],
         })
         
-        # Setup worksheet
         worksheet.hide_gridlines(2)
         worksheet.freeze_panes(1, 0)
         
-        # Headers
         headers = ['Image', 'Style #', 'Brand', 'Fit', 'Fabric Code', 'Fabrication', 'Color Name', 'Delivery', 'PO Ref']
         worksheet.set_row(0, 25)
         for col, header in enumerate(headers):
             worksheet.write(0, col, header, fmt_header)
         
-        # Column widths
-        worksheet.set_column(0, 0, COL_WIDTH_UNITS)  # Image
-        worksheet.set_column(1, 1, 22)  # Style #
-        worksheet.set_column(2, 2, 18)  # Brand
-        worksheet.set_column(3, 3, 14)  # Fit
-        worksheet.set_column(4, 4, 12)  # Fabric Code
-        worksheet.set_column(5, 5, 35)  # Fabrication
-        worksheet.set_column(6, 6, 18)  # Color Name
-        worksheet.set_column(7, 7, 18)  # Delivery
-        worksheet.set_column(8, 8, 12)  # PO Ref
+        worksheet.set_column(0, 0, COL_WIDTH_UNITS)
+        worksheet.set_column(1, 1, 22)
+        worksheet.set_column(2, 2, 18)
+        worksheet.set_column(3, 3, 14)
+        worksheet.set_column(4, 4, 12)
+        worksheet.set_column(5, 5, 35)
+        worksheet.set_column(6, 6, 18)
+        worksheet.set_column(7, 7, 18)
+        worksheet.set_column(8, 8, 12)
         
-        # Row height for images
         worksheet.set_default_row(112.5)
         
-        # Download images in parallel
         print(f"Processing {len(swatches)} swatches...")
         processed_images = {}
         
@@ -182,7 +151,6 @@ def export_excel():
         
         print(f"Downloaded {len(processed_images)}/{len(swatches)} images")
         
-        # Write data rows
         for row_num, swatch in enumerate(swatches):
             excel_row = row_num + 1
             is_even = (row_num % 2 == 1)
@@ -191,8 +159,7 @@ def export_excel():
             fmt_style = fmt_style_even if is_even else fmt_style_odd
             fmt_po = fmt_po_even if is_even else fmt_po_odd
             
-            # Write cells
-            worksheet.write(excel_row, 0, '', fmt_cell)  # Image placeholder
+            worksheet.write(excel_row, 0, '', fmt_cell)
             worksheet.write(excel_row, 1, swatch.get('styleNumber', ''), fmt_style)
             worksheet.write(excel_row, 2, swatch.get('brand', ''), fmt_cell)
             worksheet.write(excel_row, 3, swatch.get('fit', ''), fmt_cell)
@@ -202,7 +169,6 @@ def export_excel():
             worksheet.write(excel_row, 7, swatch.get('delivery', ''), fmt_cell)
             worksheet.write(excel_row, 8, swatch.get('poRef', ''), fmt_po)
             
-            # Insert image
             img_data = processed_images.get(row_num)
             if img_data:
                 try:
@@ -220,14 +186,12 @@ def export_excel():
             else:
                 worksheet.write(excel_row, 0, "No Image", fmt_cell)
         
-        # Footer
         footer_row = len(swatches) + 2
         fmt_footer = workbook.add_format({'font_size': 9, 'font_color': '#666666'})
         worksheet.write(footer_row, 1, '320 West 37th Street, 3rd floor, New York, NY 10018 | Tel 212-697-1660', fmt_footer)
         
         workbook.close()
         
-        # Return file
         output.seek(0)
         filename = f"SwatchCard_{card_info.get('poRef', 'Export')}.xlsx"
         
@@ -242,7 +206,6 @@ def export_excel():
         print(f"Error generating Excel: {e}")
         return jsonify({'error': str(e)}), 500
 
-# Health check endpoint
 @app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'service': 'swatch-card-api'})
