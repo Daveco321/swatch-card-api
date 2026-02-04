@@ -4,10 +4,18 @@ import xlsxwriter
 import requests
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from PIL import Image as PilImage
+from PIL import ImageOps
 import os
 
 app = Flask(__name__)
 CORS(app)
+
+# Image sizing - matching employee's exact settings
+TARGET_W = 150
+TARGET_H = 150
+COL_WIDTH_UNITS = 22
+ROW_HEIGHT = 112.5
 
 STYLE_CONFIG = {
     'header_bg': '#1E3A5F',
@@ -16,45 +24,71 @@ STYLE_CONFIG = {
     'row_bg_even': '#F0F4F8',
     'border_color': '#E2E8F0',
     'po_ref_color': '#DC2626',
+    'font_name': 'Calibri'
 }
 
-# Image sizing - 150x150 pixels
-IMAGE_SIZE = 150
-ROW_HEIGHT = 112.5  # Points (150px * 0.75)
-COL_WIDTH = 21      # Characters (~150px)
-
-def process_image(url, index):
-    if not url:
-        print(f"Image {index}: No URL provided")
+def process_single_image(url, target_width, target_height):
+    """EMPLOYEE'S EXACT IMAGE PROCESSING CODE"""
+    if not (isinstance(url, str) and url.startswith('http')):
         return None
+    
+    # Clean URL
+    clean_url = url.replace(' ', '%20').replace('+', '%20')
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    
     try:
-        clean_url = url.replace(' ', '%20').replace('+', '%20')
-        print(f"Image {index}: Fetching {clean_url[:80]}...")
+        response = requests.get(clean_url, headers=headers, timeout=15)
         
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        response = requests.get(clean_url, timeout=15, headers=headers)
-        
-        if response.status_code != 200:
-            print(f"Image {index}: Failed with status {response.status_code}")
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'image' not in content_type:
+            print(f"Not an image: {content_type}")
             return None
-        
-        content_type = response.headers.get('content-type', '')
-        if 'image' not in content_type and len(response.content) < 1000:
-            print(f"Image {index}: Not an image (content-type: {content_type})")
+        if response.status_code != 200:
+            print(f"Failed with status {response.status_code}")
             return None
             
-        img_data = BytesIO(response.content)
-        print(f"Image {index}: Success ({len(response.content)} bytes)")
+        image_data = BytesIO(response.content)
+        
+        with PilImage.open(image_data) as im:
+            im = ImageOps.exif_transpose(im)
+            
+            im.thumbnail((target_width * 2, target_height * 2), PilImage.Resampling.LANCZOS)
+            
+            output_format = "PNG"
+            if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+                output_format = "PNG"
+            else:
+                if im.mode != "RGB":
+                    im = im.convert("RGB")
+                output_format = "JPEG"
+            
+            processed_image_data = BytesIO()
+            im.save(processed_image_data, format=output_format, quality=85, optimize=True)
+            processed_image_data.seek(0)
+            
+            orig_w, orig_h = im.size
+        
+        width_ratio = target_width / orig_w
+        height_ratio = target_height / orig_h
+        scale_factor = min(width_ratio, height_ratio)
+        
+        final_w = orig_w * scale_factor
+        final_h = orig_h * scale_factor
+        
+        x_offset = (target_width - final_w) / 2
+        y_offset = (target_height - final_h) / 2
         
         return {
-            'index': index,
-            'image_data': img_data,
+            'image_data': processed_image_data,
+            'x_scale': scale_factor,
+            'y_scale': scale_factor,
+            'x_offset': x_offset,
+            'y_offset': y_offset,
+            'object_position': 1,
             'url': url
         }
     except Exception as e:
-        print(f"Image {index}: Error - {str(e)}")
+        print(f"Image error: {str(e)}")
         return None
 
 @app.route('/api/export-excel', methods=['POST'])
@@ -84,20 +118,24 @@ def export_excel():
         # Formats
         fmt_header = workbook.add_format({
             'bold': True,
+            'font_name': STYLE_CONFIG['font_name'],
+            'font_size': 11,
             'font_color': STYLE_CONFIG['header_text'],
             'bg_color': STYLE_CONFIG['header_bg'],
             'align': 'center',
             'valign': 'vcenter',
             'border': 1,
-            'font_size': 11,
+            'border_color': STYLE_CONFIG['border_color'],
         })
         
         base_props = {
+            'font_name': STYLE_CONFIG['font_name'],
+            'font_size': 10,
             'align': 'center',
             'valign': 'vcenter',
             'border': 1,
+            'border_color': STYLE_CONFIG['border_color'],
             'text_wrap': True,
-            'font_size': 10,
         }
         
         fmt_cell_odd = workbook.add_format({**base_props, 'bg_color': STYLE_CONFIG['row_bg_odd']})
@@ -142,15 +180,15 @@ def export_excel():
             worksheet.write(0, col, header, fmt_header)
         
         # Column widths
-        worksheet.set_column(0, 0, COL_WIDTH)      # Image - 150px wide
-        worksheet.set_column(1, 1, 18)             # Style #
-        worksheet.set_column(2, 2, 15)             # Brand
-        worksheet.set_column(3, 3, 12)             # Fit
-        worksheet.set_column(4, 4, 12)             # Fabric Code
-        worksheet.set_column(5, 5, 32)             # Fabrication
-        worksheet.set_column(6, 6, 16)             # Color Name
-        worksheet.set_column(7, 7, 16)             # Delivery
-        worksheet.set_column(8, 8, 12)             # PO Ref
+        worksheet.set_column(0, 0, COL_WIDTH_UNITS)  # Image - 150px wide
+        worksheet.set_column(1, 1, 18)               # Style #
+        worksheet.set_column(2, 2, 15)               # Brand
+        worksheet.set_column(3, 3, 12)               # Fit
+        worksheet.set_column(4, 4, 12)               # Fabric Code
+        worksheet.set_column(5, 5, 32)               # Fabrication
+        worksheet.set_column(6, 6, 16)               # Color Name
+        worksheet.set_column(7, 7, 16)               # Delivery
+        worksheet.set_column(8, 8, 12)               # PO Ref
         
         # Set default row height for image rows
         worksheet.set_default_row(ROW_HEIGHT)
@@ -159,9 +197,9 @@ def export_excel():
         print(f"Downloading images...")
         processed_images = {}
         
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             futures = {
-                executor.submit(process_image, s.get('imageUrl'), idx): idx 
+                executor.submit(process_single_image, s.get('imageUrl'), TARGET_W, TARGET_H): idx 
                 for idx, s in enumerate(swatches)
             }
             for future in as_completed(futures):
@@ -170,6 +208,7 @@ def export_excel():
                     result = future.result()
                     if result:
                         processed_images[idx] = result
+                        print(f"✓ Image {idx+1}/{len(swatches)}")
                 except Exception as e:
                     print(f"Future error for {idx}: {e}")
         
@@ -195,16 +234,16 @@ def export_excel():
             worksheet.write(excel_row, 7, swatch.get('delivery', ''), fmt_cell)
             worksheet.write(excel_row, 8, swatch.get('poRef', ''), fmt_po)
             
-            # Insert image - sized to 150x150
+            # Insert image - using employee's exact method
             img_data = processed_images.get(row_num)
             if img_data:
                 try:
                     worksheet.insert_image(excel_row, 0, "img.png", {
                         'image_data': img_data['image_data'],
-                        'x_offset': 2,
-                        'y_offset': 2,
-                        'x_scale': 0.25,
-                        'y_scale': 0.25,
+                        'x_scale': img_data['x_scale'],
+                        'y_scale': img_data['y_scale'],
+                        'x_offset': img_data['x_offset'],
+                        'y_offset': img_data['y_offset'],
                         'object_position': 1,
                     })
                 except Exception as e:
@@ -240,13 +279,13 @@ def export_excel():
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'swatch-card-api', 'version': '1.2'})
+    return jsonify({'status': 'ok', 'service': 'swatch-card-api', 'version': '2.0'})
 
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         'service': 'Swatch Card API',
-        'version': '1.2',
+        'version': '2.0',
         'endpoints': {
             '/api/export-excel': 'POST - Generate Excel file',
             '/api/health': 'GET - Health check'
