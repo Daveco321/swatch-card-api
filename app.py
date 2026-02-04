@@ -18,10 +18,10 @@ STYLE_CONFIG = {
     'po_ref_color': '#DC2626',
 }
 
-# Target image size in pixels (for the cell)
-TARGET_IMG_SIZE = 90
-ROW_HEIGHT = 95  # Row height in points
-COL_WIDTH = 14   # Column width in characters
+# Image sizing - 150x150 pixels
+IMAGE_SIZE = 150
+ROW_HEIGHT = 112.5  # Points (150px * 0.75)
+COL_WIDTH = 21      # Characters (~150px)
 
 def process_image(url, index):
     if not url:
@@ -46,17 +46,11 @@ def process_image(url, index):
             return None
             
         img_data = BytesIO(response.content)
-        img_size = len(response.content)
-        print(f"Image {index}: Success ({img_size} bytes)")
-        
-        # Calculate scale - assume most images are around 400-800px
-        # We want them to fit in ~90px cell
-        scale = 0.15  # Default scale for typical shirt photos
+        print(f"Image {index}: Success ({len(response.content)} bytes)")
         
         return {
             'index': index,
             'image_data': img_data,
-            'scale': scale,
             'url': url
         }
     except Exception as e:
@@ -72,7 +66,6 @@ def export_excel():
         
         print(f"=== Excel Export Request ===")
         print(f"Swatches count: {len(swatches)}")
-        print(f"Card info: {card_info}")
         
         if not swatches:
             return jsonify({'error': 'No swatches provided'}), 400
@@ -149,7 +142,7 @@ def export_excel():
             worksheet.write(0, col, header, fmt_header)
         
         # Column widths
-        worksheet.set_column(0, 0, COL_WIDTH)      # Image
+        worksheet.set_column(0, 0, COL_WIDTH)      # Image - 150px wide
         worksheet.set_column(1, 1, 18)             # Style #
         worksheet.set_column(2, 2, 15)             # Brand
         worksheet.set_column(3, 3, 12)             # Fit
@@ -158,6 +151,9 @@ def export_excel():
         worksheet.set_column(6, 6, 16)             # Color Name
         worksheet.set_column(7, 7, 16)             # Delivery
         worksheet.set_column(8, 8, 12)             # PO Ref
+        
+        # Set default row height for image rows
+        worksheet.set_default_row(ROW_HEIGHT)
         
         # Download images in parallel
         print(f"Downloading images...")
@@ -184,9 +180,6 @@ def export_excel():
             excel_row = row_num + 1
             is_even = (row_num % 2 == 1)
             
-            # Set row height for images
-            worksheet.set_row(excel_row, ROW_HEIGHT)
-            
             fmt_cell = fmt_cell_even if is_even else fmt_cell_odd
             fmt_style = fmt_style_even if is_even else fmt_style_odd
             fmt_po = fmt_po_even if is_even else fmt_po_odd
@@ -202,17 +195,17 @@ def export_excel():
             worksheet.write(excel_row, 7, swatch.get('delivery', ''), fmt_cell)
             worksheet.write(excel_row, 8, swatch.get('poRef', ''), fmt_po)
             
-            # Insert image if available
+            # Insert image - sized to 150x150
             img_data = processed_images.get(row_num)
             if img_data:
                 try:
                     worksheet.insert_image(excel_row, 0, "img.png", {
                         'image_data': img_data['image_data'],
-                        'x_scale': img_data['scale'],
-                        'y_scale': img_data['scale'],
-                        'x_offset': 5,
-                        'y_offset': 5,
-                        'object_position': 1,  # Move and size with cells
+                        'x_offset': 2,
+                        'y_offset': 2,
+                        'x_scale': 0.25,
+                        'y_scale': 0.25,
+                        'object_position': 1,
                     })
                 except Exception as e:
                     print(f"Insert image error row {row_num}: {e}")
@@ -247,13 +240,13 @@ def export_excel():
 
 @app.route('/api/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok', 'service': 'swatch-card-api', 'version': '1.1'})
+    return jsonify({'status': 'ok', 'service': 'swatch-card-api', 'version': '1.2'})
 
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         'service': 'Swatch Card API',
-        'version': '1.1',
+        'version': '1.2',
         'endpoints': {
             '/api/export-excel': 'POST - Generate Excel file',
             '/api/health': 'GET - Health check'
